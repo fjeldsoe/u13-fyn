@@ -195,16 +195,29 @@ def d(value) -> date | None:
 
 def parse(data: dict, today: date, *, age_group_id: int) -> list[dict]:
     classes: dict[int, set[str]] = {}
+    # Hver raekke baerer sine egne classDateFrom/classDateTo. For en 2-dages
+    # turnering spiller U13 ofte kun den ene dag - saa brug raekkernes egne
+    # datoer (tidligste start, seneste slut) frem for turneringens fulde spaend.
+    spilledage: dict[int, list[date]] = {}
     for row in data["tournaments"]:
         if row.get("ageGroupID") != age_group_id:
             continue
+        tid = row["tournamentID"]
         if row.get("classCode"):
-            classes.setdefault(row["tournamentID"], set()).add(row["classCode"])
+            classes.setdefault(tid, set()).add(row["classCode"])
+        for felt in ("classDateFrom", "classDateTo"):
+            dag = d(row.get(felt))
+            if dag:
+                spilledage.setdefault(tid, []).append(dag)
 
     rows = []
     for t in data["tournamentAdmins"]:
         tid = t["tournamentID"]
-        start, slut, frist = d(t.get("dateFrom")), d(t.get("dateTo")), d(t.get("lastRegistration"))
+        frist = d(t.get("lastRegistration"))
+        if spilledage.get(tid):
+            start, slut = min(spilledage[tid]), max(spilledage[tid])
+        else:
+            start, slut = d(t.get("dateFrom")), d(t.get("dateTo"))
         if not start or start < today:
             continue
 
@@ -413,9 +426,10 @@ h2{font-size:.8rem;font-weight:700;letter-spacing:.03em;text-transform:uppercase
 .t[data-frist="haster"]{border-left-color:var(--haster);background:var(--haster-wash)}
 .t[data-frist="snart"]{border-left-color:var(--snart)}
 .t[data-frist="udloebet"]{opacity:.55}
-.t .naar{font-size:1.1rem;font-weight:700;letter-spacing:-.01em}
-.t .klub{margin:.1rem 0 .6rem;font-size:1rem}
-.t .klub span{color:var(--muted)}
+.t .naar{font-size:.95rem;font-weight:600;color:var(--muted);letter-spacing:.01em}
+.t .klub{margin:.15rem 0 .6rem;font-size:1.15rem;font-weight:700;
+  letter-spacing:-.01em;color:var(--fg)}
+.t .klub span{font-size:.95rem;font-weight:400;color:var(--muted)}
 .raekker{display:flex;flex-wrap:wrap;gap:.3rem;margin:0 0 .7rem;padding:0;list-style:none}
 .raekker li{background:#eef5f0;border:1px solid #dae9e0;
   border-radius:calc(var(--radius) - 2px);padding:.12rem .5rem;
@@ -497,7 +511,7 @@ def render(rows: list[dict], today: date, now: datetime, *,
         naar = f"{UGEDAGE[f.weekday()]} den {f.day}. {MAANEDER[f.month - 1]}"
         hvem = f"{naeste['klub']}, {dato_tekst(naeste)} · {age_label} {', '.join(naeste['raekker']) or '?'}"
         hero = (
-            f'<a class="naeste {hero_state}" href="{e(maal)}">'
+            f'<a class="naeste {hero_state}" href="{e(maal)}" target="_blank" rel="noopener">'
             f'<p class="label">{e(naar)}</p>'
             f'<p class="stort">{e(stort)}</p>'
             f'<p class="hvem">{e(hvem)}</p></a>'
@@ -532,7 +546,8 @@ def render(rows: list[dict], today: date, now: datetime, *,
         sted = f" <span>· {e(by)}</span>" if by else ""
         raekker = "".join(f"<li>{e(age_label)} {e(c)}</li>" for c in r["raekker"]) or "<li>Rækker ikke oplyst</li>"
         knapper = "".join(
-            f'<a class="knap{" primaer" if l["primaer"] else ""}" href="{e(l["url"])}">{e(l["tekst"])}</a>'
+            f'<a class="knap{" primaer" if l["primaer"] else ""}" href="{e(l["url"])}"'
+            f' target="_blank" rel="noopener">{e(l["tekst"])}</a>'
             for l in r["links"]
         ) or '<span class="frist" data-frist="ukendt">Ingen links endnu</span>'
 
@@ -581,7 +596,7 @@ def render(rows: list[dict], today: date, now: datetime, *,
     <p><a href="kalender.ics">Hent kalenderen</a> med turneringer og frister, eller abonnér på
        den, så den følger med af sig selv.</p>
     <p>Data hentes fra sæsonplanen på
-       <a href="https://badmintonplayer.dk/DBF/Turnering/SaesonPlan/">badmintonplayer.dk</a>,
+       <a href="https://badmintonplayer.dk/DBF/Turnering/SaesonPlan/" target="_blank" rel="noopener">badmintonplayer.dk</a>,
        som er Badminton Danmarks. Tilmelding og invitationer sker altid der.
        Opdateret {e(opdateret)}. Siden er ikke officiel.</p>
   </footer>

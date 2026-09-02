@@ -24,8 +24,13 @@ def admin(tid, date_from, *, date_to=None, frist=None, title=None,
     }
 
 
-def row(tid, age_group_id, class_code):
-    return {"tournamentID": tid, "ageGroupID": age_group_id, "classCode": class_code}
+def row(tid, age_group_id, class_code, *, class_from=None, class_to=None):
+    r = {"tournamentID": tid, "ageGroupID": age_group_id, "classCode": class_code}
+    if class_from:
+        r["classDateFrom"] = f"{class_from}T00:00:00"
+    if class_to:
+        r["classDateTo"] = f"{class_to}T00:00:00"
+    return r
 
 
 def api(admins, rows):
@@ -164,6 +169,66 @@ class Parse(unittest.TestCase):
         u11 = build.parse(data, TODAY, age_group_id=3)
         self.assertEqual(u13[0]["raekker"], ["A"])
         self.assertEqual(u11[0]["raekker"], ["B"])
+
+
+class PlayDates(unittest.TestCase):
+    def test_uses_the_age_groups_class_dates_when_they_are_narrower(self):
+        # Turneringen gaar over to dage, men U13 spiller kun den anden.
+        data = api(
+            [admin(1, "2026-10-01", date_to="2026-10-02")],
+            [row(1, 4, "A", class_from="2026-10-02", class_to="2026-10-02"),
+             row(1, 4, "B", class_from="2026-10-02", class_to="2026-10-02")],
+        )
+        r = build.parse(data, TODAY, age_group_id=4)[0]
+        self.assertEqual((r["start"], r["slut"]), (date(2026, 10, 2), date(2026, 10, 2)))
+
+    def test_falls_back_to_tournament_dates_without_class_dates(self):
+        data = api(
+            [admin(1, "2026-10-01", date_to="2026-10-02")],
+            [row(1, 4, "A")],
+        )
+        r = build.parse(data, TODAY, age_group_id=4)[0]
+        self.assertEqual((r["start"], r["slut"]), (date(2026, 10, 1), date(2026, 10, 2)))
+
+    def test_spans_the_union_when_the_class_rows_disagree(self):
+        data = api(
+            [admin(1, "2026-10-01", date_to="2026-10-02")],
+            [row(1, 4, "A", class_from="2026-10-01", class_to="2026-10-02"),
+             row(1, 4, "B", class_from="2026-10-02", class_to="2026-10-02")],
+        )
+        r = build.parse(data, TODAY, age_group_id=4)[0]
+        self.assertEqual((r["start"], r["slut"]), (date(2026, 10, 1), date(2026, 10, 2)))
+
+    def test_another_age_groups_class_dates_do_not_leak_in(self):
+        data = api(
+            [admin(1, "2026-10-01", date_to="2026-10-02")],
+            [row(1, 4, "A", class_from="2026-10-02", class_to="2026-10-02"),
+             row(1, 3, "A", class_from="2026-10-01", class_to="2026-10-01")],
+        )
+        r = build.parse(data, TODAY, age_group_id=4)[0]
+        self.assertEqual((r["start"], r["slut"]), (date(2026, 10, 2), date(2026, 10, 2)))
+
+
+class Links(unittest.TestCase):
+    def rows(self):
+        data = api(
+            [admin(1, "2026-10-01", frist="2026-09-25",
+                   links=[{"tournamentLinkType": 0, "isAllow": True, "link": "/DBF/x"}])],
+            [row(1, 4, "A")],
+        )
+        return build.parse(data, TODAY, age_group_id=4)
+
+    def test_tournament_button_opens_in_a_new_tab(self):
+        out = build.render(self.rows(), TODAY, NOW, age_label="U13", region_label="Fyn")
+        knap = re.search(r'<a class="knap[^>]*>', out).group(0)
+        self.assertIn('target="_blank"', knap)
+        self.assertIn('rel="noopener"', knap)
+
+    def test_hero_link_opens_in_a_new_tab(self):
+        out = build.render(self.rows(), TODAY, NOW, age_label="U13", region_label="Fyn")
+        hero = re.search(r'<a class="naeste[^>]*>', out).group(0)
+        self.assertIn('target="_blank"', hero)
+        self.assertIn('rel="noopener"', hero)
 
 
 class RenderLabels(unittest.TestCase):
