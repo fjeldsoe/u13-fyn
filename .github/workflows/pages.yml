@@ -1,0 +1,51 @@
+name: Byg og udgiv U13-siden
+
+on:
+  schedule:
+    # Dagligt kl. 05:30 UTC. Siden skriver "Naeste frist om N dage", saa den
+    # bliver forkert efter et doegn, ogsaa naar selve data staar stille.
+    - cron: "30 5 * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+# En ny koersel maa ikke afbryde en igangvaerende udgivelse midtvejs.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  byg:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # build.py bruger kun standardbiblioteket - intet at installere.
+      # Fejler den, stopper jobbet, og den hidtidige side bliver staaende.
+      - name: Hent turneringer og byg siden
+        run: python build.py --out docs
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+
+  udgiv:
+    needs: byg
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
