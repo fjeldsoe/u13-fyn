@@ -29,10 +29,19 @@ jobs:
         with:
           python-version: "3.12"
 
-      # build.py bruger kun standardbiblioteket - intet at installere.
-      # Fejler den, stopper jobbet, og den hidtidige side bliver staaende.
+      # build.py og testene bruger kun standardbiblioteket - intet at installere.
+      - name: Kør tests
+        run: python -m unittest test_build
+
+      # Aargang og landsdel staar eksplicit her: skift de fire vaerdier for at
+      # bygge fx en U11-side eller en anden landsdel. Standarderne i build.py
+      # er de samme (U13 / Fyn).
+      # Fejler bygningen, stopper jobbet, og den hidtidige side bliver staaende.
       - name: Hent turneringer og byg siden
-        run: python build.py --out docs
+        run: >-
+          python build.py --out docs
+          --age-group-id 4 --age-group-label U13
+          --region-id 16 --region-label Fyn
 
       - uses: actions/configure-pages@v5
 

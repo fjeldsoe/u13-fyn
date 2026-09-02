@@ -1,5 +1,8 @@
 # Byg-output. Genereres af build.py og udgives af workflowet.
 /docs/
 
+# Python
+__pycache__/
+
 # Intern handover - ikke en del af den offentlige udgivelse.
 /OVERLEVERING.md

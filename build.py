@@ -15,6 +15,7 @@ import argparse
 import html
 import json
 import sys
+import time
 import urllib.error
 import urllib.request
 from datetime import date, datetime, timedelta, timezone
@@ -23,13 +24,18 @@ from pathlib import Path
 API = "https://badmintonplayer.dk/api/Tournament"
 BASE = "https://badmintonplayer.dk"
 
-REGION_FYN = 16
-AGEGROUP_U13 = 4
+# Standardvaerdier. Alle kan overstyres paa kommandolinjen, saa samme kode kan
+# bygge en U11-side, en anden landsdel osv. uden aendringer i selve scriptet.
+REGION_ID = 16          # Fyn
+AGEGROUP_ID = 4         # U13
 AGEGROUP_LABEL = "U13"
 REGION_LABEL = "Fyn"
 
-MONTHS_AHEAD = 4
+# Hvor langt frem listen kigger. Et rullende aar daekker resten af saesonen og
+# starten paa den naeste - ingen fast slutdato der skal vedligeholdes.
+HORIZON_DAYS = 365
 TIMEOUT = 30
+RETRIES = 3
 
 # Vises hoejeste raekke foerst, som paa badmintonplayer.
 CLASS_ORDER = ["E", "M", "A", "B", "C", "D"]
@@ -57,16 +63,74 @@ class ApiError(RuntimeError):
 
 
 def season_id(day: date) -> int:
-    return day.year if day.month >= 7 else day.year - 1
+    """Saesonens startaar. DBF's saeson loeber 1. august - 31. juli, saa alt fra
+    og med august hoerer til den saeson der starter i indevaerende aar."""
+    return day.year if day.month >= 8 else day.year - 1
 
 
-def fetch(date_from: date, date_to: date) -> dict:
+def seasons_for(day: date) -> list[int]:
+    """Den indevaerende saeson og den naeste. Vi henter altid begge, saa listen
+    ikke gaar tom ved saesonskiftet, og saa naeste saesons turneringer dukker op
+    saa snart de bliver lagt ind."""
+    s = season_id(day)
+    return [s, s + 1]
+
+
+def with_retry(call, *, attempts: int = RETRIES, sleep=time.sleep):
+    """Koer call() om igen ved ApiError, med voksende pause imellem. Den daglige
+    koersel maa ikke falde paa et enkelt netvaerksglimt."""
+    for i in range(attempts):
+        try:
+            return call()
+        except ApiError:
+            if i == attempts - 1:
+                raise
+            sleep(2 ** (i + 1))
+
+
+def validate_response(data: dict) -> dict:
+    """Sikrer at svaret har den form resten af scriptet forventer. Kaldes baade
+    for live-svar og for --fixture, saa en daarlig fixture fejler lige saa
+    tydeligt som en aendring i API'et."""
+    for key in ("tournamentAdmins", "tournaments"):
+        if not isinstance(data.get(key), list):
+            raise ApiError(
+                f"Uventet svarformat: '{key}' mangler. Noegler i svaret: {sorted(data)}"
+            )
+    return data
+
+
+def merge_responses(responses: list[dict]) -> dict:
+    """Slaar svar fra flere saesoner sammen. Foerste forekomst vinder, og
+    raekkefoelgen bevares."""
+    admins: list[dict] = []
+    rows: list[dict] = []
+    seen_admin: set = set()
+    seen_row: set = set()
+    for data in responses:
+        for a in data["tournamentAdmins"]:
+            key = a.get("tournamentID")
+            if key in seen_admin:
+                continue
+            seen_admin.add(key)
+            admins.append(a)
+        for t in data["tournaments"]:
+            key = (t.get("tournamentID"), t.get("ageGroupID"), t.get("classCode"))
+            if key in seen_row:
+                continue
+            seen_row.add(key)
+            rows.append(t)
+    return {"tournamentAdmins": admins, "tournaments": rows}
+
+
+def fetch_season(season: int, date_from: date, date_to: date, *,
+                 region_id: int, age_group_id: int) -> dict:
     payload = {
-        "seasonId": season_id(date_from),
-        "regionIdList": [REGION_FYN],
+        "seasonId": season,
+        "regionIdList": [region_id],
         "dateFrom": f"{date_from.isoformat()}T00:00:00.000Z",
         "dateTo": f"{date_to.isoformat()}T00:00:00.000Z",
-        "ageGroupList": [AGEGROUP_U13],
+        "ageGroupList": [age_group_id],
         "classIdList": [],
         "clubIds": [],
         "tournamentTypeList": [],
@@ -97,24 +161,42 @@ def fetch(date_from: date, date_to: date) -> dict:
     except json.JSONDecodeError as exc:
         raise ApiError(f"Svaret var ikke JSON: {raw[:300]!r}") from exc
 
-    for key in ("tournamentAdmins", "tournaments"):
-        if not isinstance(data.get(key), list):
-            raise ApiError(
-                f"Uventet svarformat: '{key}' mangler. Noegler i svaret: {sorted(data)}"
+    return validate_response(data)
+
+
+def fetch(date_from: date, date_to: date, *, region_id: int, age_group_id: int) -> dict:
+    """Henter den indevaerende og den naeste saeson og slaar dem sammen. Den
+    foerste saeson er paakraevet; fejler en senere (findes fx ikke endnu),
+    fortsaetter vi med det vi har."""
+    responses = []
+    for i, season in enumerate(seasons_for(date_from)):
+        try:
+            responses.append(
+                with_retry(lambda season=season: fetch_season(
+                    season, date_from, date_to,
+                    region_id=region_id, age_group_id=age_group_id,
+                ))
             )
-    return data
+        except ApiError as exc:
+            if i == 0:
+                raise
+            print(f"ADVARSEL: sprang saeson {season} over: {exc}", file=sys.stderr)
+    return merge_responses(responses)
 
 
 def d(value) -> date | None:
     if not value:
         return None
-    return date.fromisoformat(str(value)[:10])
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except ValueError as exc:
+        raise ApiError(f"Kunne ikke laese datoen {value!r} fra API'et") from exc
 
 
-def parse(data: dict, today: date) -> list[dict]:
+def parse(data: dict, today: date, *, age_group_id: int) -> list[dict]:
     classes: dict[int, set[str]] = {}
     for row in data["tournaments"]:
-        if row.get("ageGroupID") != AGEGROUP_U13:
+        if row.get("ageGroupID") != age_group_id:
             continue
         if row.get("classCode"):
             classes.setdefault(row["tournamentID"], set()).add(row["classCode"])
@@ -123,7 +205,7 @@ def parse(data: dict, today: date) -> list[dict]:
     for t in data["tournamentAdmins"]:
         tid = t["tournamentID"]
         start, slut, frist = d(t.get("dateFrom")), d(t.get("dateTo")), d(t.get("lastRegistration"))
-        if not start:
+        if not start or start < today:
             continue
 
         links = []
@@ -190,7 +272,7 @@ def frist_tekst(r: dict) -> tuple[str, str]:
 # --- kalender ------------------------------------------------------------
 
 
-def ics(rows: list[dict], now: datetime) -> str:
+def ics(rows: list[dict], now: datetime, *, age_label: str, region_label: str) -> str:
     def esc(s: str) -> str:
         return s.replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,").replace("\n", "\\n")
 
@@ -201,7 +283,7 @@ def ics(rows: list[dict], now: datetime) -> str:
         "PRODID:-//u13-fyn//badmintonplayer//DA",
         "CALSCALE:GREGORIAN",
         "METHOD:PUBLISH",
-        f"X-WR-CALNAME:{AGEGROUP_LABEL} {REGION_LABEL} – badminton",
+        f"X-WR-CALNAME:{age_label} {region_label} – badminton",
     ]
     for r in rows:
         klub = r["klub"]
@@ -209,7 +291,7 @@ def ics(rows: list[dict], now: datetime) -> str:
         sted = " ({})".format(r["by"]) if r["by"] and r["by"].lower() not in klub.lower() else ""
         link = r["links"][0]["url"] if r["links"] else BASE
 
-        titel = esc("{} {}{}".format(AGEGROUP_LABEL, klub, sted))
+        titel = esc("{} {}{}".format(age_label, klub, sted))
         beskrivelse = esc("Rækker: {}".format(raekker))
         out += [
             "BEGIN:VEVENT",
@@ -262,83 +344,96 @@ def fold(line: str) -> str:
 
 CSS = """
 :root{
-  --ink:#12312b;
-  --ink-soft:#4a6259;
-  --paper:#eef2ec;
+  color-scheme:light;
+  --bg:#f4f4f5;
   --card:#ffffff;
-  --court:#2c6e4f;
-  --line:#d4ddd4;
-  --haster:#b23a26;
-  --snart:#9a6a10;
-  --god:#2c6e4f;
-  --stille:#7d8a83;
+  --fg:#18181b;
+  --muted:#71717a;
+  --border:#e4e4e7;
+  --primary:#18181b;
+  --primary-fg:#fafafa;
+  --ring:#18181b;
+  --haster:#dc2626;
+  --snart:#b45309;
+  --stille:#a1a1aa;
+  --radius:.5rem;
 }
 *{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%}
 body{
   margin:0;
-  background:var(--paper);
-  color:var(--ink);
-  font-family:Archivo,"Segoe UI",system-ui,sans-serif;
-  font-size:17px;
+  background:var(--bg);
+  color:var(--fg);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,
+    "Apple Color Emoji","Segoe UI Emoji",sans-serif;
+  font-size:16px;
   line-height:1.5;
   font-variant-numeric:tabular-nums;
+  -webkit-font-smoothing:antialiased;
 }
-.wrap{max-width:52rem;margin:0 auto;padding:0 1.1rem 4rem}
+.wrap{max-width:48rem;margin:0 auto;padding:0 1.1rem 4rem}
 
 /* Toppen: naeste frist er det vigtigste paa siden. */
-header{background:var(--court);color:#fff;padding:2.2rem 0 1.6rem;margin-bottom:1.6rem}
+header{background:var(--primary);color:var(--primary-fg);padding:2rem 0 1.5rem;
+  margin-bottom:1.6rem}
 header .wrap{padding-bottom:0}
-h1{font-size:1.45rem;font-weight:600;letter-spacing:-.01em;margin:0 0 1.3rem}
+h1{font-size:1.3rem;font-weight:600;letter-spacing:-.015em;margin:0 0 1.2rem}
 .naeste{display:block;color:inherit;text-decoration:none;
-  border-top:2px solid rgba(255,255,255,.55);padding-top:.9rem}
-.naeste .label{font-size:.95rem;color:rgba(255,255,255,.8);margin:0 0 .15rem}
-.naeste .stort{font-size:clamp(1.7rem,6vw,2.6rem);font-weight:700;line-height:1.1;
-  letter-spacing:-.02em;margin:0}
-.naeste .hvem{margin:.35rem 0 0;font-size:1.05rem;color:rgba(255,255,255,.9)}
+  border-top:1px solid rgba(250,250,250,.2);padding-top:.9rem}
+.naeste .label{font-size:.85rem;color:rgba(250,250,250,.65);margin:0 0 .2rem}
+.naeste .stort{font-size:clamp(1.6rem,5.5vw,2.4rem);font-weight:700;line-height:1.1;
+  letter-spacing:-.025em;margin:0}
+.naeste .hvem{margin:.4rem 0 0;font-size:1rem;color:rgba(250,250,250,.8)}
 .naeste:hover .stort,.naeste:focus-visible .stort{text-decoration:underline}
 
 /* Filtre */
-.filtre{display:flex;flex-wrap:wrap;gap:.45rem;align-items:center;margin:0 0 1.4rem}
-.filtre p{margin:0 .35rem 0 0;font-size:.95rem;color:var(--ink-soft)}
-.chip{font:inherit;font-size:.95rem;border:1px solid var(--line);background:var(--card);
-  color:var(--ink);border-radius:2rem;padding:.3rem .8rem;cursor:pointer}
-.chip[aria-pressed="true"]{background:var(--ink);border-color:var(--ink);color:#fff}
+.filtre{display:flex;flex-wrap:wrap;gap:.4rem;align-items:center;margin:0 0 1.4rem}
+.filtre p{margin:0 .35rem 0 0;font-size:.875rem;color:var(--muted)}
+.chip{font:inherit;font-size:.875rem;font-weight:500;border:1px solid var(--border);
+  background:var(--card);color:var(--fg);border-radius:2rem;padding:.3rem .85rem;
+  cursor:pointer;transition:background-color .12s}
+.chip:hover{background:var(--bg)}
+.chip[aria-pressed="true"]{background:var(--primary);border-color:var(--primary);
+  color:var(--primary-fg)}
 
 /* Maaned */
-h2{font-size:1rem;font-weight:600;color:var(--ink-soft);margin:2rem 0 .7rem;
-  padding-bottom:.35rem;border-bottom:1px solid var(--line)}
+h2{font-size:.9rem;font-weight:600;color:var(--muted);margin:2rem 0 .7rem;
+  padding-bottom:.35rem;border-bottom:1px solid var(--border)}
 
 /* Turnering */
-.t{background:var(--card);border:1px solid var(--line);border-left:5px solid var(--stille);
-  border-radius:.5rem;padding:.95rem 1.1rem;margin-bottom:.7rem}
+.t{background:var(--card);border:1px solid var(--border);border-left:3px solid var(--stille);
+  border-radius:var(--radius);padding:.9rem 1.05rem;margin-bottom:.6rem;
+  box-shadow:0 1px 2px rgb(0 0 0/.04)}
 .t[data-frist="haster"]{border-left-color:var(--haster)}
 .t[data-frist="snart"]{border-left-color:var(--snart)}
-.t[data-frist="god"]{border-left-color:var(--god)}
-.t[data-frist="udloebet"]{opacity:.62}
-.t .naar{font-size:1.15rem;font-weight:700;letter-spacing:-.01em}
-.t .klub{margin:.1rem 0 .55rem;font-size:1.05rem}
-.t .klub span{color:var(--ink-soft)}
+.t[data-frist="udloebet"]{opacity:.6}
+.t .naar{font-size:1.1rem;font-weight:700;letter-spacing:-.01em}
+.t .klub{margin:.1rem 0 .6rem;font-size:1rem}
+.t .klub span{color:var(--muted)}
 .raekker{display:flex;flex-wrap:wrap;gap:.3rem;margin:0 0 .7rem;padding:0;list-style:none}
-.raekker li{border:1px solid var(--line);border-radius:.25rem;padding:.1rem .45rem;
-  font-size:.9rem;color:var(--ink-soft)}
-.frist{font-size:.98rem;font-weight:600;margin:0 0 .75rem}
+.raekker li{background:var(--bg);border:1px solid var(--border);
+  border-radius:calc(var(--radius) - 2px);padding:.12rem .5rem;
+  font-size:.8rem;font-weight:500;color:var(--muted)}
+.frist{font-size:.92rem;font-weight:600;margin:0 0 .8rem}
 .frist[data-frist="haster"]{color:var(--haster)}
 .frist[data-frist="snart"]{color:var(--snart)}
 .frist[data-frist="udloebet"],.frist[data-frist="ukendt"]{color:var(--stille);font-weight:500}
-.frist[data-frist="god"]{color:var(--ink-soft);font-weight:500}
+.frist[data-frist="god"]{color:var(--muted);font-weight:500}
 .knapper{display:flex;flex-wrap:wrap;gap:.45rem}
-.knap{font-size:.95rem;text-decoration:none;border-radius:.3rem;padding:.35rem .8rem;
-  border:1px solid var(--ink);color:var(--ink);display:inline-block}
-.knap.primaer{background:var(--ink);color:#fff}
-.knap:hover{text-decoration:underline}
+.knap{font-size:.875rem;font-weight:500;text-decoration:none;line-height:1.2;
+  border-radius:calc(var(--radius) - 2px);padding:.4rem .8rem;border:1px solid var(--border);
+  color:var(--fg);background:var(--card);display:inline-block;transition:background-color .12s}
+.knap:hover{background:var(--bg)}
+.knap.primaer{background:var(--primary);color:var(--primary-fg);border-color:var(--primary)}
+.knap.primaer:hover{background:var(--primary);opacity:.9}
 
-.tom{background:var(--card);border:1px dashed var(--line);border-radius:.5rem;
-  padding:1.6rem;text-align:center;color:var(--ink-soft)}
-footer{margin-top:2.6rem;padding-top:1.1rem;border-top:1px solid var(--line);
-  font-size:.92rem;color:var(--ink-soft)}
+.tom{background:var(--card);border:1px dashed var(--border);border-radius:var(--radius);
+  padding:1.6rem;text-align:center;color:var(--muted)}
+footer{margin-top:2.6rem;padding-top:1.1rem;border-top:1px solid var(--border);
+  font-size:.875rem;color:var(--muted)}
 footer a{color:inherit}
-a:focus-visible,button:focus-visible{outline:3px solid var(--court);outline-offset:2px}
+a:focus-visible,button:focus-visible{outline:2px solid var(--ring);outline-offset:2px;
+  border-radius:3px}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 """
 
@@ -370,7 +465,8 @@ opdater();
 """
 
 
-def render(rows: list[dict], today: date, now: datetime) -> str:
+def render(rows: list[dict], today: date, now: datetime, *,
+           age_label: str, region_label: str) -> str:
     e = html.escape
 
     kommende = [r for r in rows if r["dage"] is not None and r["dage"] >= 0]
@@ -391,7 +487,7 @@ def render(rows: list[dict], today: date, now: datetime) -> str:
         maal = naeste["links"][0]["url"] if naeste["links"] else BASE
         f = naeste["frist"]
         naar = f"{UGEDAGE[f.weekday()]} den {f.day}. {MAANEDER[f.month - 1]}"
-        hvem = f"{naeste['klub']}, {dato_tekst(naeste)} · U13 {', '.join(naeste['raekker']) or '?'}"
+        hvem = f"{naeste['klub']}, {dato_tekst(naeste)} · {age_label} {', '.join(naeste['raekker']) or '?'}"
         hero = (
             f'<a class="naeste" href="{e(maal)}">'
             f'<p class="label">{e(naar)}</p>'
@@ -426,7 +522,7 @@ def render(rows: list[dict], today: date, now: datetime) -> str:
         tekst, tilstand = frist_tekst(r)
         by = by_tekst(r)
         sted = f" <span>· {e(by)}</span>" if by else ""
-        raekker = "".join(f"<li>U13 {e(c)}</li>" for c in r["raekker"]) or "<li>Rækker ikke oplyst</li>"
+        raekker = "".join(f"<li>{e(age_label)} {e(c)}</li>" for c in r["raekker"]) or "<li>Rækker ikke oplyst</li>"
         knapper = "".join(
             f'<a class="knap{" primaer" if l["primaer"] else ""}" href="{e(l["url"])}">{e(l["tekst"])}</a>'
             for l in r["links"]
@@ -450,16 +546,13 @@ def render(rows: list[dict], today: date, now: datetime) -> str:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>U13-turneringer på Fyn</title>
-<meta name="description" content="Kommende U13-badmintonturneringer på Fyn med tilmeldingsfrister og direkte link til tilmelding.">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&display=swap" rel="stylesheet">
+<title>{e(age_label)}-turneringer på {e(region_label)}</title>
+<meta name="description" content="Kommende {e(age_label)}-badmintonturneringer på {e(region_label)} med tilmeldingsfrister og direkte link til tilmelding.">
 <style>{CSS}</style>
 </head>
 <body>
 <header><div class="wrap">
-  <h1>U13-badminton på Fyn</h1>
+  <h1>{e(age_label)}-badminton på {e(region_label)}</h1>
   {hero}
 </div></header>
 
@@ -477,7 +570,7 @@ def render(rows: list[dict], today: date, now: datetime) -> str:
   </div>
 
   <footer>
-    <p><a href="u13-fyn.ics">Hent kalenderen</a> med turneringer og frister, eller abonnér på
+    <p><a href="kalender.ics">Hent kalenderen</a> med turneringer og frister, eller abonnér på
        den, så den følger med af sig selv.</p>
     <p>Data hentes fra sæsonplanen på
        <a href="https://badmintonplayer.dk/DBF/Turnering/SaesonPlan/">badmintonplayer.dk</a>,
@@ -495,9 +588,18 @@ def render(rows: list[dict], today: date, now: datetime) -> str:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--out", type=Path, default=Path("docs"))
-    ap.add_argument("--months", type=int, default=MONTHS_AHEAD)
+    ap.add_argument("--age-group-id", type=int, default=AGEGROUP_ID,
+                    help=f"ageGroupID hos badmintonplayer (standard {AGEGROUP_ID} = {AGEGROUP_LABEL}).")
+    ap.add_argument("--age-group-label", default=AGEGROUP_LABEL,
+                    help="Vises paa siden og i kalenderen.")
+    ap.add_argument("--region-id", type=int, default=REGION_ID,
+                    help=f"regionIdList hos badmintonplayer (standard {REGION_ID} = {REGION_LABEL}).")
+    ap.add_argument("--region-label", default=REGION_LABEL,
+                    help="Vises paa siden og i kalenderen.")
+    ap.add_argument("--horizon-days", type=int, default=HORIZON_DAYS,
+                    help=f"Hvor mange dage frem listen kigger (standard {HORIZON_DAYS}).")
     ap.add_argument(
         "--fixture", type=Path,
         help="Laes gemt JSON i stedet for at kalde API'et. Til test.",
@@ -506,12 +608,14 @@ def main() -> int:
 
     now = datetime.now(timezone.utc)
     today = now.date()
-    data = (
-        json.loads(args.fixture.read_text(encoding="utf-8"))
-        if args.fixture
-        else fetch(today, today + timedelta(days=31 * args.months))
-    )
-    rows = parse(data, today)
+    if args.fixture:
+        data = validate_response(json.loads(args.fixture.read_text(encoding="utf-8")))
+    else:
+        data = fetch(
+            today, today + timedelta(days=args.horizon_days),
+            region_id=args.region_id, age_group_id=args.age_group_id,
+        )
+    rows = parse(data, today, age_group_id=args.age_group_id)
 
     if not rows:
         raise ApiError(
@@ -520,10 +624,15 @@ def main() -> int:
         )
 
     args.out.mkdir(parents=True, exist_ok=True)
-    (args.out / "index.html").write_text(render(rows, today, now), encoding="utf-8")
+    (args.out / "index.html").write_text(
+        render(rows, today, now,
+               age_label=args.age_group_label, region_label=args.region_label),
+        encoding="utf-8",
+    )
     # newline="" saa CRLF ikke bliver oversat paa Windows
-    with open(args.out / "u13-fyn.ics", "w", encoding="utf-8", newline="") as fh:
-        fh.write(ics(rows, now))
+    with open(args.out / "kalender.ics", "w", encoding="utf-8", newline="") as fh:
+        fh.write(ics(rows, now,
+                     age_label=args.age_group_label, region_label=args.region_label))
     (args.out / ".nojekyll").write_text("", encoding="utf-8")
 
     aabne = sum(1 for r in rows if r["dage"] is not None and r["dage"] >= 0)
