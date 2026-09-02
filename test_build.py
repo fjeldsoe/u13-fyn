@@ -3,6 +3,7 @@
     python -m unittest test_build -v
 """
 
+import re
 import unittest
 from datetime import date, datetime, timezone
 
@@ -184,6 +185,20 @@ class RenderLabels(unittest.TestCase):
         out = build.render(self.rows(), TODAY, NOW, age_label="U13", region_label="Fyn")
         self.assertTrue(out.lstrip().startswith("<!doctype html>"))
         self.assertIn("</html>", out)
+
+
+class HeroUrgency(unittest.TestCase):
+    def hero_for(self, frist):
+        data = api([admin(1, "2026-10-01", frist=frist)], [row(1, 4, "A")])
+        rows = build.parse(data, TODAY, age_group_id=4)
+        out = build.render(rows, TODAY, NOW, age_label="U13", region_label="Fyn")
+        return re.search(r'<a class="naeste([^"]*)"', out).group(1).strip()
+
+    def test_a_deadline_within_a_week_marks_the_hero_urgent(self):
+        self.assertEqual(self.hero_for("2026-09-07"), "haster")
+
+    def test_a_distant_deadline_leaves_the_hero_calm(self):
+        self.assertEqual(self.hero_for("2026-12-01"), "god")
 
 
 class IcsLabels(unittest.TestCase):

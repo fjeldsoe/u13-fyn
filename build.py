@@ -345,17 +345,19 @@ def fold(line: str) -> str:
 CSS = """
 :root{
   color-scheme:light;
-  --bg:#f4f4f5;
+  --bg:#f2f6f2;          /* svag banehalgroen paper */
   --card:#ffffff;
-  --fg:#18181b;
-  --muted:#71717a;
-  --border:#e4e4e7;
-  --primary:#18181b;
-  --primary-fg:#fafafa;
-  --ring:#18181b;
-  --haster:#dc2626;
-  --snart:#b45309;
-  --stille:#a1a1aa;
+  --fg:#182a24;          /* moerk, varm groensort */
+  --muted:#586b62;       /* sekundaer tekst */
+  --border:#dbe6dd;      /* haarfin groengraa streg */
+  --brand:#14532d;       /* dyb skovgroen - toppen */
+  --brand-fg:#ffffff;
+  --accent:#15803d;      /* groen - maanedsoverskrift, links, fokus */
+  --accent-strong:#166534;/* moerkere groen til flader med hvid tekst */
+  --haster:#c0392b;      /* roed - haster (<=7 dage) */
+  --haster-wash:#fcf0ee; /* svag roed baggrund paa hastende kort */
+  --snart:#b45309;       /* rav - snart (<=21 dage) */
+  --stille:#93a29a;      /* falmet - udloebet / ukendt */
   --radius:.5rem;
 }
 *{box-sizing:border-box}
@@ -374,47 +376,51 @@ body{
 .wrap{max-width:48rem;margin:0 auto;padding:0 1.1rem 4rem}
 
 /* Toppen: naeste frist er det vigtigste paa siden. */
-header{background:var(--primary);color:var(--primary-fg);padding:2rem 0 1.5rem;
+header{background:var(--brand);color:var(--brand-fg);padding:2rem 0 1.5rem;
   margin-bottom:1.6rem}
 header .wrap{padding-bottom:0}
 h1{font-size:1.3rem;font-weight:600;letter-spacing:-.015em;margin:0 0 1.2rem}
 .naeste{display:block;color:inherit;text-decoration:none;
-  border-top:1px solid rgba(250,250,250,.2);padding-top:.9rem}
-.naeste .label{font-size:.85rem;color:rgba(250,250,250,.65);margin:0 0 .2rem}
+  border-top:1px solid rgba(255,255,255,.2);padding-top:.9rem}
+.naeste .label{font-size:.85rem;color:rgba(255,255,255,.7);margin:0 0 .2rem}
 .naeste .stort{font-size:clamp(1.6rem,5.5vw,2.4rem);font-weight:700;line-height:1.1;
   letter-spacing:-.025em;margin:0}
-.naeste .hvem{margin:.4rem 0 0;font-size:1rem;color:rgba(250,250,250,.8)}
+.naeste .hvem{margin:.4rem 0 0;font-size:1rem;color:rgba(255,255,255,.8)}
 .naeste:hover .stort,.naeste:focus-visible .stort{text-decoration:underline}
+/* Er selve den naeste frist taet paa, saa lad tallet vise det. */
+.naeste.haster .stort{color:#ffd7d0}
+.naeste.haster .label{color:#ffc9c0}
 
 /* Filtre */
 .filtre{display:flex;flex-wrap:wrap;gap:.4rem;align-items:center;margin:0 0 1.4rem}
 .filtre p{margin:0 .35rem 0 0;font-size:.875rem;color:var(--muted)}
 .chip{font:inherit;font-size:.875rem;font-weight:500;border:1px solid var(--border);
   background:var(--card);color:var(--fg);border-radius:2rem;padding:.3rem .85rem;
-  cursor:pointer;transition:background-color .12s}
-.chip:hover{background:var(--bg)}
-.chip[aria-pressed="true"]{background:var(--primary);border-color:var(--primary);
-  color:var(--primary-fg)}
+  cursor:pointer;transition:background-color .12s,border-color .12s}
+.chip:hover{border-color:var(--accent);color:var(--accent-strong)}
+.chip[aria-pressed="true"]{background:var(--accent-strong);border-color:var(--accent-strong);
+  color:#fff}
 
 /* Maaned */
-h2{font-size:.9rem;font-weight:600;color:var(--muted);margin:2rem 0 .7rem;
-  padding-bottom:.35rem;border-bottom:1px solid var(--border)}
+h2{font-size:.8rem;font-weight:700;letter-spacing:.03em;text-transform:uppercase;
+  color:var(--accent-strong);margin:2rem 0 .7rem;padding-bottom:.35rem;
+  border-bottom:1px solid var(--border)}
 
 /* Turnering */
-.t{background:var(--card);border:1px solid var(--border);border-left:3px solid var(--stille);
+.t{background:var(--card);border:1px solid var(--border);border-left:4px solid transparent;
   border-radius:var(--radius);padding:.9rem 1.05rem;margin-bottom:.6rem;
-  box-shadow:0 1px 2px rgb(0 0 0/.04)}
-.t[data-frist="haster"]{border-left-color:var(--haster)}
+  box-shadow:0 1px 2px rgb(20 40 30/.05)}
+.t[data-frist="haster"]{border-left-color:var(--haster);background:var(--haster-wash)}
 .t[data-frist="snart"]{border-left-color:var(--snart)}
-.t[data-frist="udloebet"]{opacity:.6}
+.t[data-frist="udloebet"]{opacity:.55}
 .t .naar{font-size:1.1rem;font-weight:700;letter-spacing:-.01em}
 .t .klub{margin:.1rem 0 .6rem;font-size:1rem}
 .t .klub span{color:var(--muted)}
 .raekker{display:flex;flex-wrap:wrap;gap:.3rem;margin:0 0 .7rem;padding:0;list-style:none}
-.raekker li{background:var(--bg);border:1px solid var(--border);
+.raekker li{background:#eef5f0;border:1px solid #dae9e0;
   border-radius:calc(var(--radius) - 2px);padding:.12rem .5rem;
-  font-size:.8rem;font-weight:500;color:var(--muted)}
-.frist{font-size:.92rem;font-weight:600;margin:0 0 .8rem}
+  font-size:.8rem;font-weight:500;color:#3f594d}
+.frist{font-size:.92rem;font-weight:700;margin:0 0 .8rem}
 .frist[data-frist="haster"]{color:var(--haster)}
 .frist[data-frist="snart"]{color:var(--snart)}
 .frist[data-frist="udloebet"],.frist[data-frist="ukendt"]{color:var(--stille);font-weight:500}
@@ -422,17 +428,18 @@ h2{font-size:.9rem;font-weight:600;color:var(--muted);margin:2rem 0 .7rem;
 .knapper{display:flex;flex-wrap:wrap;gap:.45rem}
 .knap{font-size:.875rem;font-weight:500;text-decoration:none;line-height:1.2;
   border-radius:calc(var(--radius) - 2px);padding:.4rem .8rem;border:1px solid var(--border);
-  color:var(--fg);background:var(--card);display:inline-block;transition:background-color .12s}
-.knap:hover{background:var(--bg)}
-.knap.primaer{background:var(--primary);color:var(--primary-fg);border-color:var(--primary)}
-.knap.primaer:hover{background:var(--primary);opacity:.9}
+  color:var(--fg);background:var(--card);display:inline-block;
+  transition:background-color .12s,border-color .12s}
+.knap:hover{border-color:var(--accent);color:var(--accent-strong)}
+.knap.primaer{background:var(--accent-strong);color:#fff;border-color:var(--accent-strong)}
+.knap.primaer:hover{background:var(--brand);border-color:var(--brand);color:#fff}
 
 .tom{background:var(--card);border:1px dashed var(--border);border-radius:var(--radius);
   padding:1.6rem;text-align:center;color:var(--muted)}
 footer{margin-top:2.6rem;padding-top:1.1rem;border-top:1px solid var(--border);
   font-size:.875rem;color:var(--muted)}
-footer a{color:inherit}
-a:focus-visible,button:focus-visible{outline:2px solid var(--ring);outline-offset:2px;
+footer a{color:var(--accent-strong)}
+a:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:2px;
   border-radius:3px}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 """
@@ -486,10 +493,11 @@ def render(rows: list[dict], today: date, now: datetime, *,
         )
         maal = naeste["links"][0]["url"] if naeste["links"] else BASE
         f = naeste["frist"]
+        _, hero_state = frist_tekst(naeste)
         naar = f"{UGEDAGE[f.weekday()]} den {f.day}. {MAANEDER[f.month - 1]}"
         hvem = f"{naeste['klub']}, {dato_tekst(naeste)} · {age_label} {', '.join(naeste['raekker']) or '?'}"
         hero = (
-            f'<a class="naeste" href="{e(maal)}">'
+            f'<a class="naeste {hero_state}" href="{e(maal)}">'
             f'<p class="label">{e(naar)}</p>'
             f'<p class="stort">{e(stort)}</p>'
             f'<p class="hvem">{e(hvem)}</p></a>'
