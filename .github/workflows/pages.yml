@@ -2,9 +2,15 @@ name: Byg og udgiv U13-siden
 
 on:
   schedule:
-    # Dagligt kl. 05:30 UTC. Siden skriver "Naeste frist om N dage", saa den
-    # bliver forkert efter et doegn, ogsaa naar selve data staar stille.
-    - cron: "30 5 * * *"
+    # Dagligt 01:23 UTC = 02:23 dansk normaltid / 03:23 sommertid. GitHub-cron
+    # koerer altid i UTC og foelger ikke sommertid, saa tidspunktet er valgt saa
+    # det ligger midt om natten i Danmark aaret rundt - og efter midnat UTC, saa
+    # "Naeste frist om N dage" regnes paa det nye doegn.
+    # Skaeve minutter med vilje: kl. hel og halv er GitHubs travleste, og
+    # planlagte koersler bliver forsinket derefter.
+    # Dagligt fordi siden skriver "Naeste frist om N dage", som bliver forkert
+    # efter et doegn, ogsaa naar selve data staar stille.
+    - cron: "23 1 * * *"
   workflow_dispatch:
   push:
     branches: [main]
