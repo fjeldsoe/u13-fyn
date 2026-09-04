@@ -2,15 +2,21 @@ name: Byg og udgiv U13-siden
 
 on:
   schedule:
-    # Dagligt 01:23 UTC = 02:23 dansk normaltid / 03:23 sommertid. GitHub-cron
-    # koerer altid i UTC og foelger ikke sommertid, saa tidspunktet er valgt saa
-    # det ligger midt om natten i Danmark aaret rundt - og efter midnat UTC, saa
-    # "Naeste frist om N dage" regnes paa det nye doegn.
-    # Skaeve minutter med vilje: kl. hel og halv er GitHubs travleste, og
-    # planlagte koersler bliver forsinket derefter.
+    # Maalet: koerslen skal ligge mellem kl. 01 og 04 dansk tid, aaret rundt.
+    #
+    # GitHub-cron koerer altid i UTC og foelger ikke sommertid, saa vinduet
+    # flytter sig: dansk 01-04 er UTC 00-03 om vinteren (UTC+1) og UTC 23-02
+    # om sommeren (UTC+2). Faellesmaengden er UTC 00:00-02:00.
+    #
+    # 00:17 UTC giver 01:17 vintertid / 02:17 sommertid - og dermed knap 3
+    # timers luft om vinteren og 1t43m om sommeren, foer en forsinket koersel
+    # ville falde ud af vinduet. Planlagte koersler bliver rutinemaessigt
+    # forsinket 10-60 min naar GitHub har travlt, saa den luft er noedvendig.
+    # Skaeve minutter med vilje: kl. hel og halv er de travleste slots.
+    #
     # Dagligt fordi siden skriver "Naeste frist om N dage", som bliver forkert
     # efter et doegn, ogsaa naar selve data staar stille.
-    - cron: "23 1 * * *"
+    - cron: "17 0 * * *"
   workflow_dispatch:
   push:
     branches: [main]
