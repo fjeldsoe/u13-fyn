@@ -171,6 +171,45 @@ class Parse(unittest.TestCase):
         self.assertEqual(u11[0]["raekker"], ["B"])
 
 
+def utc(y, m, d, h, mi=0):
+    return datetime(y, m, d, h, mi, tzinfo=timezone.utc)
+
+
+class DanskTid(unittest.TestCase):
+    """EU-reglen: sommertid fra sidste soendag i marts kl. 01:00 UTC til
+    sidste soendag i oktober kl. 01:00 UTC. I 2026 er det 29/3 og 25/10."""
+
+    def test_vinter_er_utc_plus_en(self):
+        self.assertEqual(build.dansk_tid(utc(2026, 1, 15, 12)).hour, 13)
+
+    def test_sommer_er_utc_plus_to(self):
+        self.assertEqual(build.dansk_tid(utc(2026, 7, 15, 12)).hour, 14)
+
+    def test_minuttet_foer_sommertid_starter(self):
+        t = build.dansk_tid(utc(2026, 3, 29, 0, 59))
+        self.assertEqual((t.hour, t.minute), (1, 59))
+
+    def test_sommertid_starter_paa_slaget(self):
+        self.assertEqual(build.dansk_tid(utc(2026, 3, 29, 1)).hour, 3)
+
+    def test_minuttet_foer_sommertid_slutter(self):
+        t = build.dansk_tid(utc(2026, 10, 25, 0, 59))
+        self.assertEqual((t.hour, t.minute), (2, 59))
+
+    def test_sommertid_slutter_paa_slaget(self):
+        self.assertEqual(build.dansk_tid(utc(2026, 10, 25, 1)).hour, 2)
+
+    def test_reglen_gaelder_ogsaa_naeste_aar(self):
+        # 2027 skifter 28/3 - beregnet, ikke hardkodet
+        self.assertEqual(build.dansk_tid(utc(2027, 3, 28, 1)).hour, 3)
+        self.assertEqual(build.dansk_tid(utc(2027, 3, 28, 0, 59)).hour, 1)
+
+    def test_datoen_kan_rulle_over_midnat(self):
+        # 23:30 UTC nytaarsaften er allerede 1. januar i Danmark
+        self.assertEqual(build.dansk_tid(utc(2026, 12, 31, 23, 30)).date(),
+                         date(2027, 1, 1))
+
+
 class PlayDates(unittest.TestCase):
     def test_uses_the_age_groups_class_dates_when_they_are_narrower(self):
         # Turneringen gaar over to dage, men U13 spiller kun den anden.
@@ -250,6 +289,12 @@ class RenderLabels(unittest.TestCase):
         out = build.render(self.rows(), TODAY, NOW, age_label="U13", region_label="Fyn")
         self.assertTrue(out.lstrip().startswith("<!doctype html>"))
         self.assertIn("</html>", out)
+
+    def test_opdateret_vises_i_dansk_tid_ikke_utc(self):
+        # NOW er 05:30 UTC i september = 07:30 dansk sommertid.
+        out = build.render(self.rows(), TODAY, NOW, age_label="U13", region_label="Fyn")
+        self.assertIn("Opdateret 02.09.2026 kl. 07:30", out)
+        self.assertNotIn("kl. 05:30", out)
 
 
 class HeroUrgency(unittest.TestCase):

@@ -62,6 +62,32 @@ class ApiError(RuntimeError):
 # --- data ---------------------------------------------------------------
 
 
+def _sidste_soendag(aar: int, maaned: int) -> date:
+    """Sidste soendag i maaneden. Marts og oktober har begge 31 dage."""
+    sidste = date(aar, maaned, 31)
+    return sidste - timedelta(days=(sidste.weekday() + 1) % 7)
+
+
+def dansk_tid(nu_utc: datetime) -> datetime:
+    """UTC -> dansk tid.
+
+    zoneinfo bruges ikke med vilje: paa Windows henter den sin tidszonedatabase
+    fra PyPI-pakken 'tzdata', og scriptet skal kunne koere paa rent
+    standardbibliotek baade lokalt og paa runneren. EU-reglen er fast og enkel
+    nok til at regne selv: sommertid (UTC+2) fra sidste soendag i marts kl.
+    01:00 UTC til sidste soendag i oktober kl. 01:00 UTC, ellers normaltid
+    (UTC+1).
+    """
+    def kl_et_utc(dag: date) -> datetime:
+        return datetime(dag.year, dag.month, dag.day, 1, tzinfo=timezone.utc)
+
+    aar = nu_utc.year
+    start = kl_et_utc(_sidste_soendag(aar, 3))
+    slut = kl_et_utc(_sidste_soendag(aar, 10))
+    timer = 2 if start <= nu_utc < slut else 1
+    return nu_utc.astimezone(timezone(timedelta(hours=timer)))
+
+
 def season_id(day: date) -> int:
     """Saesonens startaar. DBF's saeson loeber 1. august - 31. juli, saa alt fra
     og med august hoerer til den saeson der starter i indevaerende aar."""
@@ -562,7 +588,8 @@ def render(rows: list[dict], today: date, now: datetime, *,
         dele.append("</section>")
 
     liste = "\n".join(dele) or ""
-    opdateret = now.strftime("%d.%m.%Y kl. %H:%M")
+    # Laeserne er danske - vis dansk tid, ikke UTC.
+    opdateret = dansk_tid(now).strftime("%d.%m.%Y kl. %H:%M")
 
     return f"""<!doctype html>
 <html lang="da">
@@ -630,7 +657,8 @@ def main() -> int:
     args = ap.parse_args()
 
     now = datetime.now(timezone.utc)
-    today = now.date()
+    # "Frist om N dage" taelles i danske doegn, ikke UTC-doegn.
+    today = dansk_tid(now).date()
     if args.fixture:
         data = validate_response(json.loads(args.fixture.read_text(encoding="utf-8")))
     else:
