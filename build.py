@@ -311,7 +311,17 @@ def frist_tekst(r: dict) -> tuple[str, str]:
 # --- kalender ------------------------------------------------------------
 
 
-def ics(rows: list[dict], now: datetime, *, age_label: str, region_label: str) -> str:
+def kalender_sti(r: dict, slags: str) -> str:
+    """Sti til enkelt-kalenderen for en turnering. 'slags' er 't' for selve
+    staevnet og 'f' for tilmeldingsfristen - samme praefiks som UID'erne."""
+    return f"kalender/{slags}{r['id']}.ics"
+
+
+def ics(rows: list[dict], now: datetime, *, age_label: str, region_label: str,
+        turneringer: bool = True, frister: bool = True) -> str:
+    """Bygger en .ics. Som standard kommer baade staevner og frister med;
+    knapperne paa hvert kort slaar den ene fra, saa man kan tilfoeje dem hver
+    for sig."""
     def esc(s: str) -> str:
         return s.replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,").replace("\n", "\\n")
 
@@ -332,18 +342,19 @@ def ics(rows: list[dict], now: datetime, *, age_label: str, region_label: str) -
 
         titel = esc("{} {}{}".format(age_label, klub, sted))
         beskrivelse = esc("Rækker: {}".format(raekker))
-        out += [
-            "BEGIN:VEVENT",
-            f"UID:t{r['id']}@u13-fyn",
-            f"DTSTAMP:{stamp}",
-            f"DTSTART;VALUE=DATE:{r['start']:%Y%m%d}",
-            f"DTEND;VALUE=DATE:{r['slut'] + timedelta(days=1):%Y%m%d}",
-            f"SUMMARY:{titel}",
-            f"DESCRIPTION:{beskrivelse}",
-            f"URL:{link}",
-            "END:VEVENT",
-        ]
-        if r["frist"]:
+        if turneringer:
+            out += [
+                "BEGIN:VEVENT",
+                f"UID:t{r['id']}@u13-fyn",
+                f"DTSTAMP:{stamp}",
+                f"DTSTART;VALUE=DATE:{r['start']:%Y%m%d}",
+                f"DTEND;VALUE=DATE:{r['slut'] + timedelta(days=1):%Y%m%d}",
+                f"SUMMARY:{titel}",
+                f"DESCRIPTION:{beskrivelse}",
+                f"URL:{link}",
+                "END:VEVENT",
+            ]
+        if frister and r["frist"]:
             frist_titel = esc("Sidste frist: {} ({})".format(klub, dato_tekst(r)))
             frist_besk = esc("Tilmeldingsfrist. Rækker: {}".format(raekker))
             out += [
@@ -474,6 +485,16 @@ h2{font-size:.8rem;font-weight:700;letter-spacing:.03em;text-transform:uppercase
 .knap.primaer{background:var(--accent-strong);color:#fff;border-color:var(--accent-strong)}
 .knap.primaer:hover{background:var(--brand);border-color:var(--brand);color:#fff}
 
+/* Kalenderknapper: en stille raekke under de rigtige handlinger, adskilt fordi
+   de ikke foerer til badmintonplayer men henter en .ics. */
+.kalender{display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.6rem;padding-top:.6rem;
+  border-top:1px dashed var(--border)}
+.kalknap{font-size:.8rem;font-weight:500;text-decoration:none;line-height:1.2;
+  color:var(--muted);background:transparent;border:1px solid var(--border);
+  border-radius:calc(var(--radius) - 2px);padding:.25rem .6rem;display:inline-block;
+  transition:color .12s,border-color .12s}
+.kalknap:hover{color:var(--accent-strong);border-color:var(--accent)}
+
 .tom{background:var(--card);border:1px dashed var(--border);border-radius:var(--radius);
   padding:1.6rem;text-align:center;color:var(--muted)}
 footer{margin-top:2.6rem;padding-top:1.1rem;border-top:1px solid var(--border);
@@ -577,12 +598,18 @@ def render(rows: list[dict], today: date, now: datetime, *,
             for l in r["links"]
         ) or '<span class="frist" data-frist="ukendt">Ingen links endnu</span>'
 
+        # Ingen target="_blank": .ics skal overlades til kalender-appen.
+        kalender = f'<a class="kalknap" href="{e(kalender_sti(r, "t"))}">Stævne til kalender</a>'
+        if r["frist"]:
+            kalender += f'<a class="kalknap" href="{e(kalender_sti(r, "f"))}">Frist til kalender</a>'
+
         dele.append(f"""<article class="t" data-frist="{tilstand}" data-raekker="{e(','.join(r['raekker']))}">
       <p class="naar">{e(dato_tekst(r))}</p>
       <p class="klub">{e(r['klub'])}{sted}</p>
       <ul class="raekker">{raekker}</ul>
       <p class="frist" data-frist="{tilstand}">{e(tekst)}</p>
       <div class="knapper">{knapper}</div>
+      <div class="kalender">{kalender}</div>
     </article>""")
     if sidste is not None:
         dele.append("</section>")
@@ -681,13 +708,31 @@ def main() -> int:
         encoding="utf-8",
     )
     # newline="" saa CRLF ikke bliver oversat paa Windows
-    with open(args.out / "kalender.ics", "w", encoding="utf-8", newline="") as fh:
-        fh.write(ics(rows, now,
-                     age_label=args.age_group_label, region_label=args.region_label))
+    def skriv_ics(sti: Path, tekst: str) -> None:
+        sti.parent.mkdir(parents=True, exist_ok=True)
+        with open(sti, "w", encoding="utf-8", newline="") as fh:
+            fh.write(tekst)
+
+    kalender = dict(age_label=args.age_group_label, region_label=args.region_label)
+    skriv_ics(args.out / "kalender.ics", ics(rows, now, **kalender))
+
+    # En fil pr. turnering, saa knapperne paa kortet kan laegge staevnet og
+    # fristen i kalenderen hver for sig.
+    enkelte = 0
+    for r in rows:
+        skriv_ics(args.out / kalender_sti(r, "t"),
+                  ics([r], now, **kalender, frister=False))
+        enkelte += 1
+        if r["frist"]:
+            skriv_ics(args.out / kalender_sti(r, "f"),
+                      ics([r], now, **kalender, turneringer=False))
+            enkelte += 1
+
     (args.out / ".nojekyll").write_text("", encoding="utf-8")
 
     aabne = sum(1 for r in rows if r["dage"] is not None and r["dage"] >= 0)
-    print(f"Skrev {len(rows)} turneringer ({aabne} med åben frist) til {args.out}/")
+    print(f"Skrev {len(rows)} turneringer ({aabne} med åben frist) "
+          f"og {enkelte} enkelt-kalendere til {args.out}/")
     return 0
 
 

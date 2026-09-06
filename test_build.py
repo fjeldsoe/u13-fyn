@@ -328,5 +328,70 @@ class IcsLabels(unittest.TestCase):
         self.assertTrue(out.rstrip().endswith("END:VCALENDAR"))
 
 
+class EnkeltKalender(unittest.TestCase):
+    """Hvert kort skal kunne lægge stævnet og fristen i kalenderen hver for sig."""
+
+    def en_row(self, frist="2026-09-25"):
+        data = api(
+            [admin(1, "2026-10-01", frist=frist,
+                   links=[{"tournamentLinkType": 0, "isAllow": True, "link": "/DBF/x"}])],
+            [row(1, 4, "A")],
+        )
+        return build.parse(data, TODAY, age_group_id=4)[0]
+
+    def test_kun_staevnet(self):
+        out = build.ics([self.en_row()], NOW, age_label="U13", region_label="Fyn",
+                        frister=False)
+        self.assertIn("UID:t1@u13-fyn", out)
+        self.assertNotIn("UID:f1@u13-fyn", out)
+        self.assertEqual(out.count("BEGIN:VEVENT"), 1)
+
+    def test_kun_fristen(self):
+        out = build.ics([self.en_row()], NOW, age_label="U13", region_label="Fyn",
+                        turneringer=False)
+        self.assertIn("UID:f1@u13-fyn", out)
+        self.assertNotIn("UID:t1@u13-fyn", out)
+        self.assertEqual(out.count("BEGIN:VEVENT"), 1)
+
+    def test_begge_dele_er_stadig_standard(self):
+        out = build.ics([self.en_row()], NOW, age_label="U13", region_label="Fyn")
+        self.assertEqual(out.count("BEGIN:VEVENT"), 2)
+
+    def test_stien_foelger_uid_praefikset(self):
+        r = self.en_row()
+        self.assertEqual(build.kalender_sti(r, "t"), "kalender/t1.ics")
+        self.assertEqual(build.kalender_sti(r, "f"), "kalender/f1.ics")
+
+
+class KalenderKnapper(unittest.TestCase):
+    def rows(self, frist="2026-09-25"):
+        data = api(
+            [admin(1, "2026-10-01", frist=frist,
+                   links=[{"tournamentLinkType": 0, "isAllow": True, "link": "/DBF/x"}])],
+            [row(1, 4, "A")],
+        )
+        return build.parse(data, TODAY, age_group_id=4)
+
+    def render(self, frist="2026-09-25"):
+        return build.render(self.rows(frist), TODAY, NOW,
+                            age_label="U13", region_label="Fyn")
+
+    def test_kortet_har_knap_til_baade_staevne_og_frist(self):
+        out = self.render()
+        self.assertIn('href="kalender/t1.ics"', out)
+        self.assertIn('href="kalender/f1.ics"', out)
+
+    def test_uden_frist_er_der_kun_staevneknappen(self):
+        out = self.render(frist=None)
+        self.assertIn('href="kalender/t1.ics"', out)
+        self.assertNotIn('href="kalender/f1.ics"', out)
+
+    def test_kalenderknapper_aabner_ikke_i_nyt_faneblad(self):
+        # .ics skal overlades til kalender-appen, ikke navigeres til.
+        out = self.render()
+        knap = re.search(r'<a[^>]*href="kalender/t1\.ics"[^>]*>', out).group(0)
+        self.assertNotIn('target="_blank"', knap)
+
+
 if __name__ == "__main__":
     unittest.main()
