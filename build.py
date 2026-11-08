@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import html
+import http.client
 import json
 import sys
 import time
@@ -123,6 +124,13 @@ def validate_response(data: dict) -> dict:
             raise ApiError(
                 f"Uventet svarformat: '{key}' mangler. Noegler i svaret: {sorted(data)}"
             )
+    # API'et skaerer stille af ved maxCount; 'count' er det sande antal.
+    count = data.get("count")
+    if isinstance(count, int) and count > len(data["tournamentAdmins"]):
+        raise ApiError(
+            f"API'et fandt {count} turneringer, men sendte kun "
+            f"{len(data['tournamentAdmins'])}. Haev maxCount i fetch_season."
+        )
     return data
 
 
@@ -179,8 +187,9 @@ def fetch_season(season: int, date_from: date, date_to: date, *,
             raw = resp.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         raise ApiError(f"HTTP {exc.code} fra API'et: {exc.read()[:300]!r}") from exc
-    except urllib.error.URLError as exc:
-        raise ApiError(f"Kunne ikke naa API'et: {exc.reason}") from exc
+    # OSError daekker URLError, timeout og afbrudt forbindelse midt i svaret.
+    except (OSError, http.client.HTTPException) as exc:
+        raise ApiError(f"Kunne ikke hente fra API'et: {exc!r}") from exc
 
     try:
         data = json.loads(raw)
@@ -219,6 +228,14 @@ def d(value) -> date | None:
         raise ApiError(f"Kunne ikke laese datoen {value!r} fra API'et") from exc
 
 
+def turnerings_id(value) -> int:
+    """Id'et bliver til et filnavn (kalender/t<id>.ics), saa det skal vaere et tal."""
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise ApiError(f"Turnerings-id er ikke et tal: {value!r}") from exc
+
+
 def parse(data: dict, today: date, *, age_group_id: int) -> list[dict]:
     classes: dict[int, set[str]] = {}
     # Hver raekke baerer sine egne classDateFrom/classDateTo. For en 2-dages
@@ -228,7 +245,7 @@ def parse(data: dict, today: date, *, age_group_id: int) -> list[dict]:
     for row in data["tournaments"]:
         if row.get("ageGroupID") != age_group_id:
             continue
-        tid = row["tournamentID"]
+        tid = turnerings_id(row["tournamentID"])
         if row.get("classCode"):
             classes.setdefault(tid, set()).add(row["classCode"])
         for felt in ("classDateFrom", "classDateTo"):
@@ -238,7 +255,7 @@ def parse(data: dict, today: date, *, age_group_id: int) -> list[dict]:
 
     rows = []
     for t in data["tournamentAdmins"]:
-        tid = t["tournamentID"]
+        tid = turnerings_id(t["tournamentID"])
         frist = d(t.get("lastRegistration"))
         if spilledage.get(tid):
             start, slut = min(spilledage[tid]), max(spilledage[tid])

@@ -3,9 +3,16 @@
     python -m unittest test_build -v
 """
 
+import http.client
+import io
+import json
 import re
+import sys
+import tempfile
 import unittest
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
+from unittest import mock
 
 import build
 
@@ -395,3 +402,70 @@ class KalenderKnapper(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TurneringsId(unittest.TestCase):
+    def test_id_som_tekst_bliver_til_tal(self):
+        data = api([admin("17660", "2026-10-01")], [row("17660", 4, "A")])
+        r = build.parse(data, TODAY, age_group_id=4)[0]
+        self.assertEqual(build.kalender_sti(r, "t"), "kalender/t17660.ics")
+        self.assertEqual(r["raekker"], ["A"])
+
+    def test_id_der_ikke_er_et_tal_stopper_bygningen(self):
+        # Id'et bliver til et filnavn - "../" maa aldrig naa frem til disken.
+        data = api([admin("a/../../../x", "2026-10-01")], [])
+        with self.assertRaises(build.ApiError):
+            build.parse(data, TODAY, age_group_id=4)
+
+
+class Netvaerksfejl(unittest.TestCase):
+    """Fejl midt i svaret skal blive til ApiError, ellers proever with_retry
+    aldrig igen."""
+
+    def test_fejl_under_hentning_bliver_til_apierror(self):
+        for fejl in (TimeoutError("timed out"), ConnectionResetError("reset"),
+                     http.client.IncompleteRead(b"")):
+            with self.subTest(fejl=type(fejl).__name__),                     mock.patch("build.urllib.request.urlopen", side_effect=fejl):
+                with self.assertRaises(build.ApiError):
+                    build.fetch_season(2026, TODAY, TODAY, region_id=16, age_group_id=4)
+
+
+class Afskaaret(unittest.TestCase):
+    def test_flere_turneringer_end_der_kom_med_stopper_bygningen(self):
+        # API'et skaerer stille af ved maxCount, men 'count' fortaeller sandheden.
+        data = api([admin(1, "2026-10-01")], [])
+        data["count"] = 21
+        with self.assertRaises(build.ApiError):
+            build.validate_response(data)
+
+    def test_count_der_passer_er_fint(self):
+        data = api([admin(1, "2026-10-01")], [])
+        data["count"] = 1
+        self.assertIs(build.validate_response(data), data)
+
+
+class Main(unittest.TestCase):
+    """Hele vejen igennem: hver kalenderknap paa siden skal pege paa en fil,
+    der faktisk blev skrevet."""
+
+    def test_alle_kalenderlinks_peger_paa_skrevne_filer(self):
+        om = lambda dage: (date.today() + timedelta(days=dage)).isoformat()
+        data = api(
+            [admin(17660, om(30), frist=om(10)), admin(17661, om(40))],
+            [row(17660, 4, "A"), row(17661, 4, "B")],
+        )
+        with tempfile.TemporaryDirectory() as mappe:
+            ud = Path(mappe) / "docs"
+            fixture = Path(mappe) / "data.json"
+            fixture.write_text(json.dumps(data), encoding="utf-8")
+            argv = ["build.py", "--out", str(ud), "--fixture", str(fixture)]
+            with mock.patch.object(sys, "argv", argv), mock.patch("sys.stdout", io.StringIO()):
+                self.assertEqual(build.main(), 0)
+            side = (ud / "index.html").read_text(encoding="utf-8")
+            links = re.findall(r'href="(kalender[^"]*\.ics)"', side)
+            self.assertEqual(sorted(links), sorted([
+                "kalender.ics", "kalender/t17660.ics", "kalender/f17660.ics",
+                "kalender/t17661.ics",
+            ]))
+            for link in links:
+                self.assertTrue((ud / link).is_file(), link)
