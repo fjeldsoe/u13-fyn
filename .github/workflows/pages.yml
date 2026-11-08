@@ -70,3 +70,27 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+
+  # GitHub saetter planlagte workflows paa pause efter 60 dage uden aktivitet
+  # i et offentligt repo. En tom commit, naar den seneste er over 30 dage
+  # gammel, nulstiller den taeller. Commits lavet med GITHUB_TOKEN starter
+  # ikke en ny koersel, saa der opstaar ingen loekke.
+  hold-i-live:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tom commit hvis repoet har staaet stille i 30 dage
+        run: |
+          alder=$(( $(date +%s) - $(git log -1 --format=%ct) ))
+          if [ "$alder" -lt $(( 30 * 86400 )) ]; then
+            echo "Seneste commit er $(( alder / 86400 )) dage gammel - intet at goere."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit --allow-empty -m "Hold workflowet aktivt"
+          git push
