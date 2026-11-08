@@ -41,6 +41,10 @@ RETRIES = 3
 # Vises hoejeste raekke foerst, som paa badmintonplayer.
 CLASS_ORDER = ["E", "M", "A", "B", "C", "D"]
 
+
+def raekke_orden(c: str) -> int:
+    return CLASS_ORDER.index(c) if c in CLASS_ORDER else 99
+
 # tournamentLinkType -> (knaptekst, er det primaere handling)
 LINK_TYPES = {
     0: ("Tilmeld", True),
@@ -254,14 +258,19 @@ def parse(data: dict, today: date, *, age_group_id: int) -> list[dict]:
                 spilledage.setdefault(tid, []).append(dag)
 
     rows = []
+    set_id: set[int] = set()
     for t in data["tournamentAdmins"]:
         tid = turnerings_id(t["tournamentID"])
+        if tid in set_id:
+            continue
+        set_id.add(tid)
         frist = d(t.get("lastRegistration"))
         if spilledage.get(tid):
             start, slut = min(spilledage[tid]), max(spilledage[tid])
         else:
             start, slut = d(t.get("dateFrom")), d(t.get("dateTo"))
-        if not start or start < today:
+        # Slutdatoen afgoer det: et 2-dages staevne skal stadig vises paa dag 2.
+        if not start or (slut or start) < today:
             continue
 
         links = []
@@ -284,9 +293,7 @@ def parse(data: dict, today: date, *, age_group_id: int) -> list[dict]:
                 "slut": slut or start,
                 "frist": frist,
                 "dage": (frist - today).days if frist else None,
-                "raekker": sorted(
-                    classes.get(tid, ()), key=lambda c: CLASS_ORDER.index(c) if c in CLASS_ORDER else 99
-                ),
+                "raekker": sorted(classes.get(tid, ()), key=raekke_orden),
                 "links": links,
             }
         )
@@ -297,13 +304,36 @@ def parse(data: dict, today: date, *, age_group_id: int) -> list[dict]:
 # --- tekst ---------------------------------------------------------------
 
 
+def dag_tekst(dag: date) -> str:
+    return f"{dag.day}. {MAANEDER[dag.month - 1]}"
+
+
 def dato_tekst(r: dict) -> str:
     a, b = r["start"], r["slut"]
     if a == b:
-        return f"{a.day}. {MAANEDER[a.month - 1]}"
+        return dag_tekst(a)
     if a.month == b.month:
-        return f"{a.day}.–{b.day}. {MAANEDER[a.month - 1]}"
-    return f"{a.day}. {MAANEDER[a.month - 1]} – {b.day}. {MAANEDER[b.month - 1]}"
+        return f"{a.day}.–{dag_tekst(b)}"
+    return f"{dag_tekst(a)} – {dag_tekst(b)}"
+
+
+def by_tekst(r: dict) -> str:
+    """Byen udelades naar den allerede staar i klubnavnet."""
+    by = r["by"]
+    return "" if not by or by.lower() in r["klub"].lower() else by
+
+
+def raekker_tekst(r: dict) -> str:
+    return ", ".join(r["raekker"]) or "?"
+
+
+def hovedlink(r: dict) -> str:
+    """Foerste link (tilmelding, hvis den findes), ellers badmintonplayer."""
+    return r["links"][0]["url"] if r["links"] else BASE
+
+
+def aaben_frist(r: dict) -> bool:
+    return r["dage"] is not None and r["dage"] >= 0
 
 
 def frist_tekst(r: dict) -> tuple[str, str]:
@@ -311,7 +341,7 @@ def frist_tekst(r: dict) -> tuple[str, str]:
     if r["frist"] is None:
         return "Frist ikke oplyst", "ukendt"
     n = r["dage"]
-    naar = f"{r['frist'].day}. {MAANEDER[r['frist'].month - 1]}"
+    naar = dag_tekst(r["frist"])
     if n < 0:
         return f"Fristen udløb {naar}", "udloebet"
     if n == 0:
@@ -353,9 +383,10 @@ def ics(rows: list[dict], now: datetime, *, age_label: str, region_label: str,
     ]
     for r in rows:
         klub = r["klub"]
-        raekker = ", ".join(r["raekker"]) or "?"
-        sted = " ({})".format(r["by"]) if r["by"] and r["by"].lower() not in klub.lower() else ""
-        link = r["links"][0]["url"] if r["links"] else BASE
+        raekker = raekker_tekst(r)
+        by = by_tekst(r)
+        sted = f" ({by})" if by else ""
+        link = hovedlink(r)
 
         titel = esc("{} {}{}".format(age_label, klub, sted))
         beskrivelse = esc("Rækker: {}".format(raekker))
@@ -554,26 +585,19 @@ def render(rows: list[dict], today: date, now: datetime, *,
            age_label: str, region_label: str) -> str:
     e = html.escape
 
-    kommende = [r for r in rows if r["dage"] is not None and r["dage"] >= 0]
+    kommende = [r for r in rows if aaben_frist(r)]
     naeste = min(kommende, key=lambda r: r["dage"]) if kommende else None
-
-    def by_tekst(r: dict) -> str:
-        """Byen udelades naar den allerede staar i klubnavnet."""
-        by = r["by"]
-        if not by or by.lower() in r["klub"].lower():
-            return ""
-        return by
 
     if naeste:
         n = naeste["dage"]
         stort = "Sidste frist er i dag" if n == 0 else (
             "Sidste frist er i morgen" if n == 1 else f"Næste frist om {n} dage"
         )
-        maal = naeste["links"][0]["url"] if naeste["links"] else BASE
+        maal = hovedlink(naeste)
         f = naeste["frist"]
         _, hero_state = frist_tekst(naeste)
-        naar = f"{UGEDAGE[f.weekday()]} den {f.day}. {MAANEDER[f.month - 1]}"
-        hvem = f"{naeste['klub']}, {dato_tekst(naeste)} · {age_label} {', '.join(naeste['raekker']) or '?'}"
+        naar = f"{UGEDAGE[f.weekday()]} den {dag_tekst(f)}"
+        hvem = f"{naeste['klub']}, {dato_tekst(naeste)} · {age_label} {raekker_tekst(naeste)}"
         hero = (
             f'<a class="naeste {hero_state}" href="{e(maal)}" target="_blank" rel="noopener">'
             f'<p class="label">{e(naar)}</p>'
@@ -585,8 +609,7 @@ def render(rows: list[dict], today: date, now: datetime, *,
         <p class="hvem">Siden opdaterer sig selv, når nye turneringer bliver lagt op.</p></div>"""
 
     # Raekke-filtre: kun dem der faktisk forekommer.
-    findes = sorted({c for r in rows for c in r["raekker"]},
-                    key=lambda c: CLASS_ORDER.index(c) if c in CLASS_ORDER else 99)
+    findes = sorted({c for r in rows for c in r["raekker"]}, key=raekke_orden)
     chips = "".join(
         f'<button class="chip" type="button" aria-pressed="false" data-raekke="{e(c)}">{e(c)}</button>'
         for c in findes
@@ -735,19 +758,17 @@ def main() -> int:
 
     # En fil pr. turnering, saa knapperne paa kortet kan laegge staevnet og
     # fristen i kalenderen hver for sig.
-    enkelte = 0
     for r in rows:
         skriv_ics(args.out / kalender_sti(r, "t"),
                   ics([r], now, **kalender, frister=False))
-        enkelte += 1
         if r["frist"]:
             skriv_ics(args.out / kalender_sti(r, "f"),
                       ics([r], now, **kalender, turneringer=False))
-            enkelte += 1
 
     (args.out / ".nojekyll").write_text("", encoding="utf-8")
 
-    aabne = sum(1 for r in rows if r["dage"] is not None and r["dage"] >= 0)
+    aabne = sum(1 for r in rows if aaben_frist(r))
+    enkelte = len(rows) + sum(1 for r in rows if r["frist"])
     print(f"Skrev {len(rows)} turneringer ({aabne} med åben frist) "
           f"og {enkelte} enkelt-kalendere til {args.out}/")
     return 0

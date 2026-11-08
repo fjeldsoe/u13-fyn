@@ -167,6 +167,24 @@ class Parse(unittest.TestCase):
         rows = build.parse(data, TODAY, age_group_id=4)
         self.assertEqual(len(rows), 1)
 
+    def test_et_staevne_i_gang_vises_stadig_paa_dag_to(self):
+        # TODAY er 2. september: U13 spiller 1.-2., saa staevnet er ikke slut.
+        data = api(
+            [admin(1, "2026-09-01", date_to="2026-09-02"), admin(2, "2026-08-31", date_to="2026-09-01")],
+            [row(1, 4, "A", class_from="2026-09-01", class_to="2026-09-02"), row(2, 4, "A")],
+        )
+        rows = build.parse(data, TODAY, age_group_id=4)
+        self.assertEqual([r["id"] for r in rows], [1])
+
+    def test_samme_staevne_vises_kun_en_gang(self):
+        # Fx naar to saesoner returnerer samme id, en gang som tal og en gang som tekst.
+        data = api(
+            [admin(1, "2026-09-01", date_to="2026-09-02"), admin("1", "2026-09-01", date_to="2026-09-02")],
+            [row(1, 4, "A"), row("1", 4, "A")],
+        )
+        rows = build.parse(data, TODAY, age_group_id=4)
+        self.assertEqual([r["id"] for r in rows], [1])
+
     def test_class_rows_are_filtered_by_the_requested_age_group(self):
         data = api(
             [admin(1, "2026-10-01")],
