@@ -487,3 +487,19 @@ class Main(unittest.TestCase):
             ]))
             for link in links:
                 self.assertTrue((ud / link).is_file(), link)
+
+
+class Statistik(unittest.TestCase):
+    def setUp(self):
+        links = [{"tournamentLinkType": 0, "isAllow": True, "link": "/tilmeld/1"}]
+        data = api([admin(1, "2026-09-20", frist="2026-09-10", links=links)], [row(1, 4, "A")])
+        rows = build.parse(data, TODAY, age_group_id=4)
+        self.side = build.render(rows, TODAY, NOW, age_label="U13", region_label="Fyn")
+
+    def test_goatcounter_er_paa_siden(self):
+        self.assertIn('data-goatcounter="https://fjeldsoe.goatcounter.com/count"', self.side)
+
+    def test_alle_links_taeller_klik(self):
+        # Hvert <a> paa siden skal have et klik-navn, ellers kan man ikke se hvad der bruges.
+        for a in re.findall(r"<a [^>]*>", self.side):
+            self.assertIn("data-goatcounter-click=", a, a)

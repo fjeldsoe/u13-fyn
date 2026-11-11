@@ -24,6 +24,8 @@ from pathlib import Path
 
 API = "https://badmintonplayer.dk/api/Tournament"
 BASE = "https://badmintonplayer.dk"
+# Anonym besoegsstatistik uden cookies: https://fjeldsoe.goatcounter.com
+GOATCOUNTER = "https://fjeldsoe.goatcounter.com/count"
 
 # Standardvaerdier. Alle kan overstyres paa kommandolinjen, saa samme kode kan
 # bygge en U11-side, en anden landsdel osv. uden aendringer i selve scriptet.
@@ -599,7 +601,8 @@ def render(rows: list[dict], today: date, now: datetime, *,
         naar = f"{UGEDAGE[f.weekday()]} den {dag_tekst(f)}"
         hvem = f"{naeste['klub']}, {dato_tekst(naeste)} · {age_label} {raekker_tekst(naeste)}"
         hero = (
-            f'<a class="naeste {hero_state}" href="{e(maal)}" target="_blank" rel="noopener">'
+            f'<a class="naeste {hero_state}" href="{e(maal)}" target="_blank" rel="noopener"'
+            f' data-goatcounter-click="Næste frist">'
             f'<p class="label">{e(naar)}</p>'
             f'<p class="stort">{e(stort)}</p>'
             f'<p class="hvem">{e(hvem)}</p></a>'
@@ -634,14 +637,15 @@ def render(rows: list[dict], today: date, now: datetime, *,
         raekker = "".join(f"<li>{e(age_label)} {e(c)}</li>" for c in r["raekker"]) or "<li>Rækker ikke oplyst</li>"
         knapper = "".join(
             f'<a class="knap{" primaer" if l["primaer"] else ""}" href="{e(l["url"])}"'
+            f' data-goatcounter-click="{e(l["tekst"])}"'
             f' target="_blank" rel="noopener">{e(l["tekst"])}</a>'
             for l in r["links"]
         ) or '<span class="frist" data-frist="ukendt">Ingen links endnu</span>'
 
         # Ingen target="_blank": .ics skal overlades til kalender-appen.
-        kalender = f'<a class="kalknap" href="{e(kalender_sti(r, "t"))}">Stævne til kalender</a>'
+        kalender = f'<a class="kalknap" href="{e(kalender_sti(r, "t"))}" data-goatcounter-click="Stævne til kalender">Stævne til kalender</a>'
         if r["frist"]:
-            kalender += f'<a class="kalknap" href="{e(kalender_sti(r, "f"))}">Frist til kalender</a>'
+            kalender += f'<a class="kalknap" href="{e(kalender_sti(r, "f"))}" data-goatcounter-click="Frist til kalender">Frist til kalender</a>'
 
         dele.append(f"""<article class="t" data-frist="{tilstand}" data-raekker="{e(','.join(r['raekker']))}">
       <p class="naar">{e(dato_tekst(r))}</p>
@@ -687,15 +691,17 @@ def render(rows: list[dict], today: date, now: datetime, *,
   </div>
 
   <footer>
-    <p><a href="kalender.ics">Hent kalenderen</a> med turneringer og frister, eller abonnér på
+    <p><a href="kalender.ics" data-goatcounter-click="Hent kalenderen">Hent kalenderen</a> med turneringer og frister, eller abonnér på
        den, så den følger med af sig selv.</p>
     <p>Data hentes fra sæsonplanen på
-       <a href="https://badmintonplayer.dk/DBF/Turnering/SaesonPlan/" target="_blank" rel="noopener">badmintonplayer.dk</a>,
+       <a href="https://badmintonplayer.dk/DBF/Turnering/SaesonPlan/" target="_blank" rel="noopener" data-goatcounter-click="badmintonplayer.dk">badmintonplayer.dk</a>,
        som er Badminton Danmarks. Tilmelding og invitationer sker altid der.
-       Opdateret {e(opdateret)}. Siden er ikke officiel.</p>
+       Opdateret {e(opdateret)}. Siden er ikke officiel og tæller besøg anonymt
+       uden cookies.</p>
   </footer>
 </div>
 <script>{JS}</script>
+<script data-goatcounter="{GOATCOUNTER}" async src="https://gc.zgo.at/count.js"></script>
 </body>
 </html>
 """
